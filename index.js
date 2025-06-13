@@ -23,21 +23,18 @@ db.serialize(() => {
 
 // === Daftar paket ===
 const paketList = {
-  lokal: { name: "Lokal", harga: 2000, channel: 'https://t.me/channel_lokal' },
-  cina: { name: "Cina", harga: 1000, channel: 'https://t.me/channel_cina' },
-  asia: { name: "Asia", harga: 1000, channel: 'https://t.me/channel_asia' },
-  amerika: { name: "Amerika", harga: 1000, channel: 'https://t.me/channel_amerika' },
-  yaoi: { name: "Yaoi", harga: 2000, channel: 'https://t.me/channel_yaoi' }
+  lokal: { name: "Lokal", harga: 2000, channel: 'https://t.me/+05D0N_SWsMNkMTY1' },
+  cina: { name: "Cina", harga: 1000, channel: 'https://t.me/+D0o3LkSFhLAxZGQ1' },
+  asia: { name: "Asia", harga: 1000, channel: 'https://t.me/+PyUHdR0yAkQ2NDBl' }, // belum Anda berikan
+  amerika: { name: "Amerika", harga: 1000, channel: 'https://t.me/+p_5vP8ACzUs1MTNl' },
+  yaoi: { name: "Yaoi", harga: 2000, channel: 'https://t.me/+Bs212qTHcRZkOTg9' }
 };
 
-// Start menu
+
+// === Show Menu ===
 function showMainMenu(ctx) {
   ctx.reply(
-    `👋 Selamat datang!
-
-Pilih paket yang kamu inginkan:
-
-` +
+    `👋 Selamat datang!\n\nPilih paket yang kamu inginkan:\n\n` +
     `📦 Lokal - Rp2.000\n📦 Cina - Rp1.000\n📦 Asia - Rp1.000\n📦 Amerika - Rp1.000\n📦 Yaoi - Rp2.000`,
     Markup.inlineKeyboard([
       [Markup.button.callback('Lokal - Rp2K', 'lokal')],
@@ -49,52 +46,75 @@ Pilih paket yang kamu inginkan:
   );
 }
 
+// === Start ===
 bot.start((ctx) => showMainMenu(ctx));
 
-// Pilih paket
+// === Pilih Paket ===
 bot.action(/(lokal|cina|asia|amerika|yaoi)/, async (ctx) => {
   const paketId = ctx.match[1];
   const userId = ctx.from.id;
-  const paket = paketList[paketId];
   const now = Date.now();
 
-  db.run(`INSERT OR REPLACE INTO users (id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
-    [userId, paketId, now, 'pending']);
-
-  ctx.replyWithMarkdown(
-    `📦 *${paket.name}* - Rp${paket.harga.toLocaleString('id-ID')}
-
-` +
-    `Silakan bayar via *DANA* ke:\n📱 *${DANA_NUMBER}*
-
-` +
-    `Setelah itu, kirimkan *bukti pembayaran* berupa foto.
-
-` +
-    `❓ *Gimana cara transfer?*\nKlik tombol di bawah untuk hubungi admin.`,
-    {
-      reply_markup: Markup.inlineKeyboard([
-        [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
-        [{ text: '❌ Batalkan', callback_data: 'cancel_order' }]
-      ])
-    }
-  );
-
-  setTimeout(() => {
-    db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
-      if (row && row.status === 'pending') {
-        db.run(`DELETE FROM users WHERE id = ?`, [userId]);
-        ctx.telegram.sendMessage(userId,
-          `⏰ Waktu pembayaran telah habis (24 jam).\nSilakan ulangi pembelian.`,
-          {
-            reply_markup: Markup.inlineKeyboard([
-              [{ text: '🔁 Kembali ke Menu', callback_data: 'back_to_menu' }]
-            ])
-          }
+  db.get(`SELECT timestamp, status FROM users WHERE id = ?`, [userId], (err, row) => {
+    if (row && row.status === 'pending') {
+      const elapsed = now - row.timestamp;
+      if (elapsed < 24 * 60 * 60 * 1000) {
+        return ctx.reply(
+          `⏳ Kamu sudah melakukan pemesanan dan belum menyelesaikan pembayaran.\nSilakan kirim bukti pembayaran atau hubungi admin.`,
+          Markup.inlineKeyboard([
+            [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
+            [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
+          ])
         );
       }
-    });
-  }, 24 * 60 * 60 * 1000);
+    }
+
+    const paket = paketList[paketId];
+
+    db.run(`INSERT OR REPLACE INTO users (id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
+      [userId, paketId, now, 'pending']);
+
+    ctx.replyWithMarkdown(
+      `📦 *${paket.name}* - Rp${paket.harga.toLocaleString('id-ID')}\n\n` +
+      `Silakan bayar via *DANA* ke:\n📱 *${DANA_NUMBER}*\n\n` +
+      `Setelah itu, kirimkan *bukti pembayaran* berupa foto.\n\n` +
+      `❓ *Gimana cara transfer?*\nKlik tombol di bawah untuk hubungi admin.`,
+      {
+        reply_markup: Markup.inlineKeyboard([
+          [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
+          [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
+        ])
+      }
+    );
+
+    setTimeout(() => {
+      db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
+        if (row && row.status === 'pending') {
+          db.run(`DELETE FROM users WHERE id = ?`, [userId]);
+          ctx.telegram.sendMessage(userId,
+            `⏰ Waktu pembayaran telah habis (24 jam).\nSilakan ulangi pembelian.`,
+            {
+              reply_markup: Markup.inlineKeyboard([
+                [{ text: '🔁 Kembali ke Menu', callback_data: 'back_to_menu' }]
+              ])
+            }
+          );
+        }
+      });
+    }, 24 * 60 * 60 * 1000);
+  });
+});
+
+// === Batal & Kembali ===
+bot.action('cancel_order', (ctx) => {
+  const userId = ctx.from.id;
+  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
+    if (!err) {
+      ctx.answerCbQuery('Pesanan dibatalkan.');
+      ctx.reply('❌ Pesanan kamu telah dibatalkan.');
+      showMainMenu(ctx);
+    }
+  });
 });
 
 bot.action('back_to_menu', (ctx) => {
@@ -103,15 +123,7 @@ bot.action('back_to_menu', (ctx) => {
   showMainMenu(ctx);
 });
 
-bot.action('cancel_order', (ctx) => {
-  const userId = ctx.from.id;
-  db.run(`DELETE FROM users WHERE id = ?`, [userId]);
-  ctx.answerCbQuery('Pesanan dibatalkan.');
-  ctx.deleteMessage().catch(() => {});
-  showMainMenu(ctx);
-});
-
-// Kirim bukti pembayaran
+// === Kirim Bukti Pembayaran ===
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
   const username = ctx.from.username || ctx.from.first_name;
@@ -136,7 +148,7 @@ bot.on('photo', async (ctx) => {
   });
 });
 
-// Admin approve
+// === Admin Approve ===
 bot.action(/approve_(\d+)/, (ctx) => {
   const userId = ctx.match[1];
 
@@ -148,12 +160,8 @@ bot.action(/approve_(\d+)/, (ctx) => {
     db.run(`UPDATE users SET status = 'approved' WHERE id = ?`, [userId]);
 
     bot.telegram.sendMessage(userId,
-      `✅ *Selamat! Pembayaran kamu sudah di-approve.*
-
-` +
-      `Klik tombol di bawah ini untuk masuk ke channel *${paketList[paketId].name}*.
-
-` +
+      `✅ *Selamat! Pembayaran kamu sudah di-approve.*\n\n` +
+      `Klik tombol di bawah ini untuk masuk ke channel *${paketList[paketId].name}*.\n\n` +
       `📩 Jika kamu lupa linknya, silakan chat admin @jnizo`,
       {
         parse_mode: 'Markdown',
@@ -170,7 +178,7 @@ bot.action(/approve_(\d+)/, (ctx) => {
   });
 });
 
-// Admin reject
+// === Admin Reject ===
 bot.action(/reject_(\d+)/, (ctx) => {
   const userId = ctx.match[1];
   db.run(`DELETE FROM users WHERE id = ?`, [userId]);
@@ -178,7 +186,7 @@ bot.action(/reject_(\d+)/, (ctx) => {
   ctx.answerCbQuery('User ditolak.');
 });
 
-// Web server
+// === Web Server ===
 const app = express();
 app.get("/", (_, res) => res.send("Bot aktif"));
 app.listen(3000, () => console.log("Web server aktif di port 3000"));
