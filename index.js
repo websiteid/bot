@@ -80,7 +80,7 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
         `Silakan bayar via *DANA* ke:\n📱 *${DANA_NUMBER}*\n\n` +
         `Atau scan QR code di atas.\n\n` +
         `Setelah itu, kirimkan *bukti pembayaran* berupa foto.\n\n` +
-        `❓ *Gimana cara transfer?*\nKlik tombol di bawah untuk hubungi admin.`,
+        `❓ *Gimana cara transfer?*\nKlik tombol di bawah untuk hubungi admin : @jnizo/@ujoyp`,
       parse_mode: 'Markdown',
       reply_markup: Markup.inlineKeyboard([
         [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
