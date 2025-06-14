@@ -1,22 +1,24 @@
+// Telegram Bot Pembayaran via DANA dengan Telegraf + SQLite + Express
+
 const { Telegraf, Markup } = require('telegraf');
 const dotenv = require('dotenv');
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 
-// Load environment variables
+// Load .env
 dotenv.config();
 
-// Inisialisasi bot dan data penting
+// Inisialisasi bot & konfigurasi
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_CHAT_IDS = [process.env.ADMIN_CHAT_ID];
 const DANA_NUMBER = '087883536039';
 const DANA_QR_LINK = 'https://files.catbox.moe/blokl7.jpg';
 
-// Timeout
-const PAYMENT_TIMEOUT = 24 * 60 * 60 * 1000;
-const REMINDER_TIMEOUT = 12 * 60 * 60 * 1000;
+// Timeout (ms)
+const PAYMENT_TIMEOUT = 24 * 60 * 60 * 1000;    // 24 jam
+const REMINDER_TIMEOUT = 12 * 60 * 60 * 1000;   // 12 jam
 
-// Init DB
+// Inisialisasi database SQLite
 const db = new sqlite3.Database('./users.db');
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS orders (
@@ -25,235 +27,240 @@ db.serialize(() => {
     paket TEXT,
     timestamp INTEGER,
     status TEXT,
-    expired_at INTEGER
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY,
-    paket TEXT,
-    timestamp INTEGER,
-    status TEXT
-  )`);
+    expired_at INTEGER,
+    kicked INTEGER DEFAULT 0
+  )`, (err) => {
+    if (err) {
+      console.error('Error creating orders table:', err.message);
+    }
+  });
 });
 
-// Paket
+
+
+// Daftar paket tersedia
 const paketList = {
-  lokal: { name: "Lokal", harga: 2000, channel: 'https://t.me/+05D0N_SWsMNkMTY1' },
-  cina: { name: "Cina", harga: 1000, channel: 'https://t.me/+D0o3LkSFhLAxZGQ1' },
-  asia: { name: "Asia", harga: 1000, channel: 'https://t.me/+PyUHdR0yAkQ2NDBl' },
-  amerika: { name: "Amerika", harga: 1000, channel: 'https://t.me/+p_5vP8ACzUs1MTNl' },
-  yaoi: { name: "Yaoi", harga: 2000, channel: 'https://t.me/+Bs212qTHcRZkOTg9' }
+  lokal:   { name: "Lokal",   harga: 2000, channel: 'https://t.me/+05D0N_SWsMNkMTY1' },
+  cina:    { name: "Cina",    harga: 2000, channel: 'https://t.me/+D0o3LkSFhLAxZGQ1' },
+  asia:    { name: "Asia",    harga: 2000, channel: 'https://t.me/+PyUHdR0yAkQ2NDBl' },
+  amerika: { name: "Amerika", harga: 2000, channel: 'https://t.me/+p_5vP8ACzUs1MTNl' },
+  yaoi:    { name: "Yaoi",    harga: 2000, channel: 'https://t.me/+Bs212qTHcRZkOTg9' }
 };
 
-// Menu utama
+// Fungsi: tampilkan menu utama paket
 function showMainMenu(ctx) {
   ctx.reply(
-    `👋 Selamat datang!\n\nPilih paket yang kamu inginkan:\n\n` +
-    `📦 Lokal - Rp2.000\n📦 Cina - Rp1.000\n📦 Asia - Rp1.000\n📦 Amerika - Rp1.000\n📦 Yaoi - Rp2.000`,
+    `👋 Selamat datang!\n\nPilih paket yang kamu inginkan:\n` +
+    `📦 Lokal - Rp2.000\n📦 Cina - Rp2.000\n📦 Asia - Rp2.000\n📦 Amerika - Rp2.000\n📦 Yaoi - Rp2.000`,
     Markup.inlineKeyboard([
-      [Markup.button.callback('Lokal - Rp2K', 'lokal')],
-      [Markup.button.callback('Cina - Rp1K', 'cina')],
-      [Markup.button.callback('Asia - Rp1K', 'asia')],
-      [Markup.button.callback('Amerika - Rp1K', 'amerika')],
-      [Markup.button.callback('Yaoi - Rp2K', 'yaoi')]
+      [Markup.button.callback('Lokal', 'lokal')],
+      [Markup.button.callback('Cina', 'cina')],
+      [Markup.button.callback('Asia', 'asia')],
+      [Markup.button.callback('Amerika', 'amerika')],
+      [Markup.button.callback('Yaoi', 'yaoi')]
     ])
   );
 }
 
-// Start
-bot.start((ctx) => {
-  showMainMenu(ctx);
-});
+// /start -> tampilkan menu
+bot.start((ctx) => { showMainMenu(ctx); });
 
-// Saat user memilih paket
-bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
-  const paketId = ctx.match[1];
+// Saat user pilih paket
+bot.action(/^(lokal|cina|asia|amerika|yaoi)$/, (ctx) => {
+  const paketId = ctx.match[0];
   const userId = ctx.from.id;
   const now = Date.now();
 
-  db.get(`SELECT paket, timestamp, status FROM users WHERE id = ?`, [userId], (err, row) => {
-  if (row && row.status === 'pending') {
-  const paket = paketList[row.paket];
-  ctx.answerCbQuery(); // <- Tambahkan baris ini
-  return ctx.reply(
-    `⚠️ Kamu masih memiliki transaksi yang belum selesai untuk paket *${paket.name}*.\n` +
-    `Silakan selesaikan pembayaran terlebih dahulu atau klik /batal`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard([
-        [{ text: '✅ Lanjutkan Pembayaran', callback_data: 'continue_payment' }],
-        [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
-      ])
+  // Cek transaksi pending
+  db.get(
+    `SELECT paket, status FROM users WHERE id = ?`,
+    [userId],
+    (err, row) => {
+      if (row && row.status === 'pending') {
+        const pkg = paketList[row.paket];
+        ctx.answerCbQuery();
+        return ctx.reply(
+          `⚠️ Kamu masih memiliki transaksi *${pkg.name}* yang belum selesai.\n` +
+          `Silakan lanjutkan bayar atau ketik /batal`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: Markup.inlineKeyboard([
+              [Markup.button.callback('✅ Lanjutkan Pembayaran', 'continue_payment')],
+              [Markup.button.callback('❌ Batalkan Pesanan', 'cancel_order')]
+            ])
+          }
+        );
+      }
+
+      // Insert transaksi baru
+      db.run(
+        `INSERT OR REPLACE INTO users (id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
+        [userId, paketId, now, 'pending']
+      );
+      db.run(
+        `INSERT INTO orders (user_id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
+        [userId, paketId, now, 'pending']
+      );
+
+      const pkg = paketList[paketId];
+      // Kirim QR kode & instruksi
+      ctx.replyWithPhoto(DANA_QR_LINK, {
+        caption:
+          `📦 *${pkg.name}* – Rp${pkg.harga.toLocaleString('id-ID')}\n\n` +
+          `Silakan bayar DANA/QRIS ke:\n📱 *${DANA_NUMBER}* (DANA)\n\n` +
+          `Setelah bayar, kirim bukti foto.\n\n` +
+          `Butuh bantuan❓ Chat admin @ujoyp`,
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.url('📞 Hubungi Admin', 'https://t.me/ujoyp')],
+          [Markup.button.callback('❌ Batalkan Pesanan', 'cancel_order')]
+        ])
+      });
+
+      // Reminder setelah 12 jam
+      setTimeout(() => {
+        db.get(
+          `SELECT status FROM users WHERE id = ?`,
+          [userId],
+          (e, r) => {
+            if (r && r.status === 'pending') {
+              ctx.telegram.sendMessage(
+                userId,
+                `⏰ Pengingat! Kamu masih memiliki pembayaran paket *${pkg.name}*.`,
+                { parse_mode: 'Markdown' }
+              );
+            }
+          }
+        );
+      }, REMINDER_TIMEOUT);
+
+      // Cancel jika lewat 24 jam
+      setTimeout(() => {
+        db.get(
+          `SELECT status FROM users WHERE id = ?`,
+          [userId],
+          (e, r) => {
+            if (r && r.status === 'pending') {
+              db.run(`DELETE FROM users WHERE id = ?`, [userId]);
+              ctx.telegram.sendMessage(
+                userId,
+                `⏰ Waktu pembayaran habis. Silakan ulangi pembelian.`,
+                { reply_markup: Markup.inlineKeyboard([[Markup.button.callback('🔁 Kembali ke Menu', 'back_to_menu')]]) }
+              );
+            }
+          }
+        );
+      }, PAYMENT_TIMEOUT);
     }
   );
-}
-
-
-    const paket = paketList[paketId];
-
-    db.run(`INSERT OR REPLACE INTO users (id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
-      [userId, paketId, now, 'pending']);
-
-    db.run(`INSERT INTO orders (user_id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
-      [userId, paketId, now, 'pending']);
-
-    ctx.replyWithPhoto(DANA_QR_LINK, {
-      caption:
-        `📦 *${paket.name}* - Rp${paket.harga.toLocaleString('id-ID')}\n\n` +
-        `Silakan bayar via *DANA* ke:\n📱 *${DANA_NUMBER}*\n\n` +
-        `Atau scan QR code di atas.\n\n` +
-        `Setelah itu, kirimkan *bukti pembayaran* berupa foto.\n\n` +
-        `❓ *Gimana cara transfer?* Chat admin @jnizo/@ujoyp`,
-      parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard([
-        [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
-        [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
-      ])
-    });
-
-    // Reminder
-    setTimeout(() => {
-      db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
-        if (row && row.status === 'pending') {
-          ctx.telegram.sendMessage(userId,
-            `⏰ *Pengingat!* Kamu belum menyelesaikan pembayaran untuk paket *${paket.name}*.`,
-            { parse_mode: 'Markdown' });
-        }
-      });
-    }, REMINDER_TIMEOUT);
-
-    // Timeout
-    setTimeout(() => {
-      db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
-        if (row && row.status === 'pending') {
-          db.run(`DELETE FROM users WHERE id = ?`, [userId]);
-          ctx.telegram.sendMessage(userId,
-            `⏰ Waktu pembayaran habis. Silakan ulangi pembelian.`,
-            {
-              reply_markup: Markup.inlineKeyboard([
-                [{ text: '🔁 Kembali ke Menu', callback_data: 'back_to_menu' }]
-              ])
-            }
-          );
-        }
-      });
-    }, PAYMENT_TIMEOUT);
-  });
 });
 
-
-// Lanjutkan pembayaran
+// Lanjutkan jika masih pending
 bot.action('continue_payment', (ctx) => {
   const userId = ctx.from.id;
-  db.get(`SELECT paket FROM users WHERE id = ? AND status = 'pending'`, [userId], (err, row) => {
-    if (!row) return ctx.reply('❌ Tidak ada transaksi yang tertunda.');
-    const paket = paketList[row.paket];
-
-    ctx.replyWithPhoto(DANA_QR_LINK, {
-      caption:
-        `📦 *${paket.name}* - Rp${paket.harga.toLocaleString('id-ID')}\n\n` +
-        `Silakan lanjutkan pembayaran via *DANA* ke:\n📱 *${DANA_NUMBER}*`,
-      parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard([
-        [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
-        [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
-      ])
-    });
-
-    ctx.answerCbQuery(); // feedback klik
-  });
+  db.get(
+    `SELECT paket FROM users WHERE id = ? AND status = 'pending'`,
+    [userId],
+    (err, row) => {
+      if (!row) return ctx.reply('❌ Tidak ada transaksi yang tertunda.');
+      const pkg = paketList[row.paket];
+      ctx.replyWithPhoto(DANA_QR_LINK, {
+        caption: `📦 *${pkg.name}* – Rp${pkg.harga.toLocaleString('id-ID')}\n\nSilakan lanjutkan pembayaran via DANA ke:\n📱 *${DANA_NUMBER}*`,
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.url('📞 Hubungi Admin', 'https://t.me/ujoyp')],
+          [Markup.button.callback('❌ Batalkan Pesanan', 'cancel_order')]
+        ])
+      });
+      ctx.answerCbQuery();
+    }
+  );
 });
 
-
-// Bukti pembayaran
+// Terima bukti pembayaran (foto)
 bot.on('photo', (ctx) => {
   const userId = ctx.from.id;
   const username = ctx.from.username || ctx.from.first_name;
-  db.get(`SELECT paket FROM users WHERE id = ?`, [userId], (err, row) => {
-    if (!row) return ctx.reply('❌ Kamu belum memilih paket.');
-    const paketId = row.paket;
-    const photo = ctx.message.photo.at(-1).file_id;
+  const photoFileId = ctx.message.photo.slice(-1)[0].file_id;
 
-    ADMIN_CHAT_IDS.forEach(adminId => {
-      ctx.telegram.sendPhoto(adminId, photo, {
-        caption: `📥 Bukti pembayaran dari @${username}\nID: ${userId}\nPaket: ${paketId}`,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '✅ Approve', callback_data: `approve_${userId}` }],
-            [{ text: '❌ Tolak', callback_data: `reject_${userId}` }]
-          ]
-        }
+  db.get(
+    `SELECT paket FROM users WHERE id = ?`,
+    [userId],
+    (err, row) => {
+      if (!row) return ctx.reply('❌ Kamu belum memilih paket.');
+      ADMIN_CHAT_IDS.forEach(adminId => {
+        ctx.telegram.sendPhoto(adminId, photoFileId, {
+          caption:
+            `📥 Bukti pembayaran dari @${username}\n` +
+            `ID: ${userId}\n` +
+            `Paket: ${row.paket}`,
+          reply_markup: {
+            inline_keyboard: [
+              [Markup.button.callback('✅ Approve', `approve_${userId}`)],
+              [Markup.button.callback('❌ Tolak', `reject_${userId}`)]
+            ]
+          }
+        });
       });
-    });
-
-    ctx.reply('📩 Bukti pembayaran sudah dikirim ke admin. Tunggu konfirmasi ya.');
-  });
-});
-
-// Approve
-bot.action(/approve_(\d+)/, (ctx) => {
-  const userId = ctx.match[1];
-  db.get(`SELECT paket FROM users WHERE id = ?`, [userId], (err, row) => {
-    if (!row) return ctx.reply('❌ Data user tidak ditemukan.');
-    const paketId = row.paket;
-    const expiredAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
-
-    db.run(`UPDATE orders SET status = 'approved', expired_at = ? WHERE user_id = ? AND status = 'pending'`, [expiredAt, userId]);
-    ctx.editMessageReplyMarkup({ inline_keyboard: [[{ text: '✅ Sudah di-approve', callback_data: 'noop' }]] });
-
-    bot.telegram.sendMessage(userId,
-      `✅ *Selamat! Pembayaran kamu sudah di-approve.*\n\n` +
-      `Klik tombol di bawah ini untuk masuk ke channel *${paketList[paketId].name}*.`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '📺 Masuk ke Channel', url: paketList[paketId].channel }],
-            [{ text: '🔁 Kembali ke Menu', callback_data: 'back_to_menu' }]
-          ]
-        }
-      }
-    );
-    ctx.answerCbQuery('User approved.');
-  });
-});
-
-// Reject
-bot.action(/reject_(\d+)/, (ctx) => {
-  const userId = ctx.match[1];
-  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
-    if (!err) {
-      bot.telegram.sendMessage(userId, '❌ Maaf, bukti pembayaran tidak valid.');
-
-      // Edit tombol jadi sudah ditolak
-      ctx.editMessageReplyMarkup({
-        inline_keyboard: [
-          [{ text: '❌ Sudah Ditolak', callback_data: 'noop' }]
-        ]
-      });
-
-      ctx.answerCbQuery('User ditolak.');
-      ctx.reply('❌ Penolakan berhasil dikirim ke user.');
-    } else {
-      ctx.answerCbQuery('Gagal menolak user.');
-      ctx.reply('⚠️ Gagal menolak user dari database.');
+      ctx.reply('📩 Bukti pembayaran dikirim ke admin. Mohon tunggu.');
     }
+  );
+});
+
+// Admin: Approve pembayaran
+bot.action(/approve_(\d+)/, (ctx) => {
+  const userId = Number(ctx.match[1]);
+  db.get(
+    `SELECT paket FROM users WHERE id = ?`,
+    [userId],
+    (err, row) => {
+      if (!row) return ctx.reply('❌ Data user tidak ditemukan.');
+      const expiredAt = Date.now() + 25 * 24 * 60 * 60 * 1000 ;
+      db.run(
+        `UPDATE orders SET status = 'approved', expired_at = ? WHERE user_id = ? AND status = 'pending'`,
+        [expiredAt, userId]
+      );
+      db.run(`UPDATE users SET status = 'approved' WHERE id = ?`, [userId]);
+      const pkg = paketList[row.paket];
+      ctx.editMessageReplyMarkup({ inline_keyboard: [[Markup.button.callback('✅ Sudah di‑approve', 'noop')]] });
+      bot.telegram.sendMessage(
+        userId,
+        `✅ Pembayaran *${pkg.name}* sudah di‑approve!\nKlik tombol di bawah untuk masuk ke channel.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [Markup.button.url('📺 Masuk ke Channel', pkg.channel)],
+              [Markup.button.callback('🔁 Kembali ke Menu', 'back_to_menu')]
+            ]
+          }
+        }
+      );
+      ctx.answerCbQuery();
+    }
+  );
+});
+
+// Admin: Reject pembayaran
+bot.action(/reject_(\d+)/, (ctx) => {
+  const userId = Number(ctx.match[1]);
+  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
+    bot.telegram.sendMessage(userId, '❌ Maaf, bukti pembayaran tidak valid.');
+    ctx.editMessageReplyMarkup({ inline_keyboard: [[Markup.button.callback('❌ Sudah Ditolak', 'noop')]] });
+    ctx.answerCbQuery();
   });
 });
 
-
-// Batalkan pesanan
+// Batalkan pesanan user
 bot.action('cancel_order', (ctx) => {
   const userId = ctx.from.id;
-  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
-    if (!err) {
-     ctx.answerCbQuery('❌ Pesanan kamu telah dibatalkan.');
+  db.run(`DELETE FROM users WHERE id = ?`, [userId], () => {
+    ctx.answerCbQuery('Pesanan dibatalkan.');
     showMainMenu(ctx);
-    }
   });
 });
 
-// Kembali ke menu + hapus pending
+// Kembali ke menu (hapus pending)
 bot.action('back_to_menu', (ctx) => {
   const userId = ctx.from.id;
   db.run(`DELETE FROM users WHERE id = ?`, [userId], () => {
@@ -263,72 +270,173 @@ bot.action('back_to_menu', (ctx) => {
   });
 });
 
-bot.action('noop', (ctx) => ctx.answerCbQuery('Sudah diproses.'));
+// Callback noop agar tombol tidak respon
+bot.action('noop', (ctx) => ctx.answerCbQuery());
 
-// Perintah /batal untuk kembali ke menu utama dan hapus status pending
+// Command /batal
 bot.command('batal', (ctx) => {
   const userId = ctx.from.id;
   db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
-    if (!err) {
-      ctx.reply('❌ Pesanan kamu telah dibatalkan.');
-      showMainMenu(ctx);
-    } else {
-      ctx.reply('⚠️ Gagal membatalkan pesanan.');
+    ctx.reply(err ? '⚠️ Gagal batalkan.' : '❌ Pesanan dibatalkan.');
+    showMainMenu(ctx);
+  });
+});
+
+// Command /status
+bot.command('status', (ctx) => {
+  const userId = ctx.from.id;
+  db.all(
+    `SELECT paket, status, timestamp, expired_at FROM orders WHERE user_id = ? ORDER BY timestamp DESC`,
+    [userId],
+    (err, rows) => {
+      if (!rows.length) return ctx.reply('❌ Kamu belum melakukan pemesanan.');
+      const now = Date.now();
+      let text = '📦 *Status Pemesanan Kamu:*\n\n';
+      rows.forEach((r, i) => {
+        const pkg = paketList[r.paket];
+        const ts = new Date(r.timestamp).toLocaleString('id-ID');
+        const exp = r.expired_at ? new Date(r.expired_at).toLocaleString('id-ID') : '-';
+        const isExpired = r.expired_at && r.expired_at < now;
+        text += `#${i+1}\n📦 *${pkg.name}*\n📊 ${r.status}\n🕓 ${ts}\n⏳ Expired: ${exp}`;
+        if (r.status === 'approved' && !isExpired)
+          text += `\n🔗 [Masuk Channel](${pkg.channel})`;
+        text += '\n\n';
+      });
+      ctx.reply(text, {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+        reply_markup: Markup.inlineKeyboard([[Markup.button.callback('🛍️ Beli Lagi', 'back_to_menu')]])
+      });
+    }
+  );
+});
+
+bot.command('tendang', (ctx) => {
+  if (!ADMIN_CHAT_IDS.includes(ctx.chat.id.toString())) return;
+  const now = Date.now();
+  db.all(
+    `SELECT user_id, expired_at FROM orders
+     WHERE status = 'approved' AND expired_at < ? AND kicked = 0
+     GROUP BY user_id`, [now],
+    async (err, rows) => {
+      if (err) {
+        console.error('DB error:', err);
+        return ctx.reply('❌ Terjadi kesalahan saat memeriksa data.');
+      }
+      if (!rows.length) return ctx.reply('✅ Tidak ada pengguna expired.');
+
+      for (const {user_id, expired_at} of rows) {
+        const user = await bot.telegram.getChat(user_id).catch(() => null);
+        const username = user?.username ? `@${user.username}` : user?.first_name || '––';
+        const expiredStr = new Date(expired_at).toLocaleString('id-ID');
+        await ctx.reply(
+          `🧾 User Expired:\n🆔 ${user_id}\n👤 ${username}\n📅 Expired: ${expiredStr}`,
+          Markup.inlineKeyboard([[Markup.button.callback('🚫 Tendang', `tendang_manual_${user_id}`)]])
+        );
+      }
+    }
+  );
+});
+
+bot.on('callback_query', async (ctx) => {
+  const q = ctx.callbackQuery.data;
+  if (!q.startsWith('tendang_manual_')) return;
+  const userId = parseInt(q.split('_').pop());
+  try {
+    db.run(`UPDATE orders SET kicked = 1 WHERE user_id = ?`, [userId]);
+    db.run(`DELETE FROM users WHERE id = ?`, [userId]);
+    await bot.telegram.sendMessage(userId, '⛔️ Akses kamu ke channel sudah dicabut. Silahkan lakukan perpanjangan/berhenti.');
+    await ctx.answerCbQuery('✅ User ditandai ditendang.');
+    await ctx.editMessageReplyMarkup();
+  } catch (e) {
+    console.error(e);
+    await ctx.answerCbQuery('❌ Gagal menendang user.');
+  }
+});
+
+
+
+bot.action(/^tendang_manual_(\d+)$/, async (ctx) => {
+  const userId = ctx.match[1];
+
+  db.get(`SELECT expired_at FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT 1`, [userId], async (err, row) => {
+    if (err || !row) {
+      console.error(err);
+      return ctx.answerCbQuery('❌ Gagal mengambil data user');
+    }
+
+    const expiredDate = new Date(row.expired_at).toLocaleString('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    });
+
+    try {
+      // Ambil info user dari Telegram
+      const userInfo = await bot.telegram.getChat(userId);
+      const username = userInfo.username ? `@${userInfo.username}` : (userInfo.first_name || 'Tanpa Nama');
+
+      // Kirim pesan ke user
+      await bot.telegram.sendMessage(userId, '⛔️ Akses kamu ke channel sudah dicabut oleh admin. Silahkan lakukan perpanjangan/berhenti berlangganan');
+
+      // Hapus dari tabel `users`
+      db.run(`DELETE FROM users WHERE id = ?`, [userId]);
+
+      // Update order ditandai ditendang
+      db.run(`UPDATE orders SET kicked = 1 WHERE user_id = ?`, [userId]);
+
+      // Kirim ke admin info lengkap
+      ctx.answerCbQuery('✅ User ditandai ditendang');
+      ctx.reply(`✅ User ${username} (ID: ${userId}) sudah ditandai sebagai ditendang.\n📅 Expired: ${expiredDate}`);
+    } catch (error) {
+      console.error(error);
+      ctx.answerCbQuery('❌ Gagal mendapatkan info user');
     }
   });
 });
 
 
-// /status
-bot.command('status', (ctx) => {
-  const userId = ctx.from.id;
-  db.all(`SELECT paket, status, timestamp, expired_at FROM orders WHERE user_id = ? ORDER BY timestamp DESC`, [userId], (err, rows) => {
-    if (!rows || rows.length === 0) return ctx.reply('❌ Kamu belum melakukan pemesanan.');
 
-    const now = Date.now();
-    let message = '📦 *Status Pemesanan Kamu:*\n\n';
-
-    rows.forEach((row, i) => {
-      const p = paketList[row.paket];
-      const time = new Date(row.timestamp).toLocaleString('id-ID');
-      const exp = row.expired_at ? new Date(row.expired_at).toLocaleString('id-ID') : '-';
-      const expired = row.expired_at && row.expired_at < now;
-
-      message += `#${i + 1}\n📦 *${p.name}*\n📊 *${row.status}*\n🕓 ${time}\n⏳ Expired: ${exp}`;
-      if (row.status === 'approved' && !expired) {
-        message += `\n🔗 [Masuk Channel](${p.channel})`;
-      }
-      message += '\n\n';
-    });
-
-    ctx.reply(message, {
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🛍️ Beli Paket Lagi', callback_data: 'back_to_menu' }]
-        ]
-      }
-    });
-  });
-});
-
-// List pending (admin only)
-bot.command('listpending', (ctx) => {
+// Admin: /daftar
+bot.command('daftar', (ctx) => {
   if (!ADMIN_CHAT_IDS.includes(ctx.chat.id.toString())) return;
-  db.all(`SELECT id, paket, timestamp FROM users WHERE status = 'pending'`, [], (err, rows) => {
-    if (!rows.length) return ctx.reply('✅ Tidak ada pesanan pending.');
-    const msg = rows.map(r =>
-      `🆔 ${r.id} - Paket: ${paketList[r.paket].name} - ${new Date(r.timestamp).toLocaleString('id-ID')}`
-    ).join('\n\n');
-    ctx.reply(`📋 Pending Orders:\n\n${msg}`);
+  db.all(`SELECT DISTINCT user_id FROM orders`, [], (err, users) => {
+    if (!users.length) return ctx.reply('Belum ada pengguna.');
+    let res = '📋 *Daftar Pengguna:*\n\n';
+    let cnt = 0;
+    users.forEach(u => {
+      bot.telegram.getChat(u.user_id).then(userInfo => {
+        const username = userInfo.username ? `@${userInfo.username}` : userInfo.first_name;
+        db.get(
+          `SELECT paket, status, expired_at FROM orders WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1`,
+          [u.user_id],
+          (e, r) => {
+            if (r) {
+              const pkg = paketList[r.paket]?.name || r.paket;
+              const exp = r.expired_at ? new Date(r.expired_at).toLocaleString('id-ID') : '-';
+              res += `🆔 ${u.user_id} (${username})\n📦 ${pkg}\n📊 ${r.status}\n⏳ Expired: ${exp}\n\n`;
+            }
+            cnt++;
+            if (cnt === users.length) {
+              ctx.reply(res, { parse_mode: 'Markdown' });
+            }
+          }
+        );
+      }).catch(() => {
+        cnt++;
+        if (cnt === users.length) {
+          ctx.reply(res, { parse_mode: 'Markdown' });
+        }
+      });
+    });
   });
 });
 
-// Web server
+
+// Ekspres server untuk keep-alive
 const app = express();
-app.get("/", (_, res) => res.send("Bot aktif"));
-app.listen(3000, () => console.log("Web server aktif di port 3000"));
+app.get('/', (_, res) => res.send('Bot aktif'));
+app.listen(3000, () => console.log('Web server aktif di port 3000'));
 
 // Jalankan bot
 bot.launch();
