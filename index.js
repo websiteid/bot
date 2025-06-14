@@ -12,11 +12,11 @@ const ADMIN_CHAT_IDS = [process.env.ADMIN_CHAT_ID];
 const DANA_NUMBER = '087883536039';
 const DANA_QR_LINK = 'https://files.catbox.moe/blokl7.jpg';
 
-// Waktu batas pembayaran dan pengingat (dalam ms)
-const PAYMENT_TIMEOUT = 24 * 60 * 60 * 1000; // 24 jam
-const REMINDER_TIMEOUT = 12 * 60 * 60 * 1000; // 12 jam
+// Timeout
+const PAYMENT_TIMEOUT = 24 * 60 * 60 * 1000;
+const REMINDER_TIMEOUT = 12 * 60 * 60 * 1000;
 
-// Inisialisasi database SQLite
+// Init DB
 const db = new sqlite3.Database('./users.db');
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS orders (
@@ -36,7 +36,7 @@ db.serialize(() => {
   )`);
 });
 
-// Daftar paket tersedia
+// Paket
 const paketList = {
   lokal: { name: "Lokal", harga: 2000, channel: 'https://t.me/+05D0N_SWsMNkMTY1' },
   cina: { name: "Cina", harga: 1000, channel: 'https://t.me/+D0o3LkSFhLAxZGQ1' },
@@ -60,8 +60,10 @@ function showMainMenu(ctx) {
   );
 }
 
-// Saat bot /start
-bot.start((ctx) => showMainMenu(ctx));
+// Start
+bot.start((ctx) => {
+  showMainMenu(ctx);
+});
 
 // Saat user memilih paket
 bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
@@ -69,25 +71,32 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
   const userId = ctx.from.id;
   const now = Date.now();
 
-  // Cek apakah sudah ada pending order
-  db.get(`SELECT timestamp, status FROM users WHERE id = ?`, [userId], (err, row) => {
-    if (row && row.status === 'pending') {
-      const elapsed = now - row.timestamp;
-      if (elapsed < PAYMENT_TIMEOUT) {
-        db.run(`DELETE FROM users WHERE id = ?`, [userId]);
-      }
+  db.get(`SELECT paket, timestamp, status FROM users WHERE id = ?`, [userId], (err, row) => {
+  if (row && row.status === 'pending') {
+  const paket = paketList[row.paket];
+  ctx.answerCbQuery(); // <- Tambahkan baris ini
+  return ctx.reply(
+    `⚠️ Kamu masih memiliki transaksi yang belum selesai untuk paket *${paket.name}*.\n` +
+    `Silakan selesaikan pembayaran terlebih dahulu atau klik /batal`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: Markup.inlineKeyboard([
+        [{ text: '✅ Lanjutkan Pembayaran', callback_data: 'continue_payment' }],
+        [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
+      ])
     }
+  );
+}
+
 
     const paket = paketList[paketId];
 
-    // Simpan ke tabel users dan orders
     db.run(`INSERT OR REPLACE INTO users (id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
       [userId, paketId, now, 'pending']);
 
     db.run(`INSERT INTO orders (user_id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
       [userId, paketId, now, 'pending']);
 
-    // Kirim info pembayaran
     ctx.replyWithPhoto(DANA_QR_LINK, {
       caption:
         `📦 *${paket.name}* - Rp${paket.harga.toLocaleString('id-ID')}\n\n` +
@@ -102,25 +111,24 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
       ])
     });
 
-    // Kirim pengingat setelah 12 jam
+    // Reminder
     setTimeout(() => {
       db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
         if (row && row.status === 'pending') {
           ctx.telegram.sendMessage(userId,
-            `⏰ *Pengingat!* Kamu belum menyelesaikan pembayaran untuk paket *${paket.name}*.\nSelesaikan sebelum 24 jam ya.`,
-            { parse_mode: 'Markdown' }
-          );
+            `⏰ *Pengingat!* Kamu belum menyelesaikan pembayaran untuk paket *${paket.name}*.`,
+            { parse_mode: 'Markdown' });
         }
       });
     }, REMINDER_TIMEOUT);
 
-    // Hapus jika lebih dari 24 jam belum bayar
+    // Timeout
     setTimeout(() => {
       db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
         if (row && row.status === 'pending') {
           db.run(`DELETE FROM users WHERE id = ?`, [userId]);
           ctx.telegram.sendMessage(userId,
-            `⏰ Waktu pembayaran habis (24 jam). Silakan ulangi pembelian.`,
+            `⏰ Waktu pembayaran habis. Silakan ulangi pembelian.`,
             {
               reply_markup: Markup.inlineKeyboard([
                 [{ text: '🔁 Kembali ke Menu', callback_data: 'back_to_menu' }]
@@ -133,17 +141,39 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
   });
 });
 
-// Kirim bukti pembayaran (foto)
+
+// Lanjutkan pembayaran
+bot.action('continue_payment', (ctx) => {
+  const userId = ctx.from.id;
+  db.get(`SELECT paket FROM users WHERE id = ? AND status = 'pending'`, [userId], (err, row) => {
+    if (!row) return ctx.reply('❌ Tidak ada transaksi yang tertunda.');
+    const paket = paketList[row.paket];
+
+    ctx.replyWithPhoto(DANA_QR_LINK, {
+      caption:
+        `📦 *${paket.name}* - Rp${paket.harga.toLocaleString('id-ID')}\n\n` +
+        `Silakan lanjutkan pembayaran via *DANA* ke:\n📱 *${DANA_NUMBER}*`,
+      parse_mode: 'Markdown',
+      reply_markup: Markup.inlineKeyboard([
+        [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
+        [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
+      ])
+    });
+
+    ctx.answerCbQuery(); // feedback klik
+  });
+});
+
+
+// Bukti pembayaran
 bot.on('photo', (ctx) => {
   const userId = ctx.from.id;
   const username = ctx.from.username || ctx.from.first_name;
-
   db.get(`SELECT paket FROM users WHERE id = ?`, [userId], (err, row) => {
     if (!row) return ctx.reply('❌ Kamu belum memilih paket.');
     const paketId = row.paket;
     const photo = ctx.message.photo.at(-1).file_id;
 
-    // Kirim ke admin
     ADMIN_CHAT_IDS.forEach(adminId => {
       ctx.telegram.sendPhoto(adminId, photo, {
         caption: `📥 Bukti pembayaran dari @${username}\nID: ${userId}\nPaket: ${paketId}`,
@@ -160,54 +190,59 @@ bot.on('photo', (ctx) => {
   });
 });
 
-// Admin approve
-bot.action(/approve_(\d+)/, async (ctx) => {
+// Approve
+bot.action(/approve_(\d+)/, (ctx) => {
   const userId = ctx.match[1];
-
-  db.get(`SELECT paket FROM users WHERE id = ?`, [userId], async (err, row) => {
+  db.get(`SELECT paket FROM users WHERE id = ?`, [userId], (err, row) => {
     if (!row) return ctx.reply('❌ Data user tidak ditemukan.');
     const paketId = row.paket;
-    const channelLink = paketList[paketId].channel;
-
     const expiredAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
-    db.run(`UPDATE orders SET status = 'approved', expired_at = ? WHERE user_id = ? AND status = 'pending'`, [expiredAt, userId]);
 
-    try {
-      await ctx.editMessageReplyMarkup({
-        inline_keyboard: [[{ text: '✅ Sudah di-approve', callback_data: 'noop' }]]
-      });
-    } catch (e) {
-      console.error('Gagal ubah tombol:', e);
-    }
+    db.run(`UPDATE orders SET status = 'approved', expired_at = ? WHERE user_id = ? AND status = 'pending'`, [expiredAt, userId]);
+    ctx.editMessageReplyMarkup({ inline_keyboard: [[{ text: '✅ Sudah di-approve', callback_data: 'noop' }]] });
 
     bot.telegram.sendMessage(userId,
       `✅ *Selamat! Pembayaran kamu sudah di-approve.*\n\n` +
-      `Klik tombol di bawah ini untuk masuk ke channel *${paketList[paketId].name}*.\n\n` +
-      `📩 Jika lupa link, chat admin @jnizo`,
+      `Klik tombol di bawah ini untuk masuk ke channel *${paketList[paketId].name}*.`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '📺 Masuk ke Channel', url: channelLink }],
+            [{ text: '📺 Masuk ke Channel', url: paketList[paketId].channel }],
             [{ text: '🔁 Kembali ke Menu', callback_data: 'back_to_menu' }]
           ]
         }
       }
     );
-
     ctx.answerCbQuery('User approved.');
   });
 });
 
-// Admin reject
+// Reject
 bot.action(/reject_(\d+)/, (ctx) => {
   const userId = ctx.match[1];
-  db.run(`DELETE FROM users WHERE id = ?`, [userId]);
-  bot.telegram.sendMessage(userId, '❌ Maaf, bukti pembayaran tidak valid. Silakan coba lagi.');
-  ctx.answerCbQuery('User ditolak.');
+  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
+    if (!err) {
+      bot.telegram.sendMessage(userId, '❌ Maaf, bukti pembayaran tidak valid.');
+
+      // Edit tombol jadi sudah ditolak
+      ctx.editMessageReplyMarkup({
+        inline_keyboard: [
+          [{ text: '❌ Sudah Ditolak', callback_data: 'noop' }]
+        ]
+      });
+
+      ctx.answerCbQuery('User ditolak.');
+      ctx.reply('❌ Penolakan berhasil dikirim ke user.');
+    } else {
+      ctx.answerCbQuery('Gagal menolak user.');
+      ctx.reply('⚠️ Gagal menolak user dari database.');
+    }
+  });
 });
 
-// User batalkan order
+
+// Batalkan pesanan
 bot.action('cancel_order', (ctx) => {
   const userId = ctx.from.id;
   db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
@@ -219,17 +254,33 @@ bot.action('cancel_order', (ctx) => {
   });
 });
 
-// Kembali ke menu
+// Kembali ke menu + hapus pending
 bot.action('back_to_menu', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.deleteMessage().catch(() => {});
-  showMainMenu(ctx);
+  const userId = ctx.from.id;
+  db.run(`DELETE FROM users WHERE id = ?`, [userId], () => {
+    ctx.answerCbQuery();
+    ctx.deleteMessage().catch(() => {});
+    showMainMenu(ctx);
+  });
 });
 
-// Tombol dummy
 bot.action('noop', (ctx) => ctx.answerCbQuery('Sudah diproses.'));
 
-// Cek status order
+// Perintah /batal untuk kembali ke menu utama dan hapus status pending
+bot.command('batal', (ctx) => {
+  const userId = ctx.from.id;
+  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
+    if (!err) {
+      ctx.reply('❌ Pesanan kamu telah dibatalkan.');
+      showMainMenu(ctx);
+    } else {
+      ctx.reply('⚠️ Gagal membatalkan pesanan.');
+    }
+  });
+});
+
+
+// /status
 bot.command('status', (ctx) => {
   const userId = ctx.from.id;
   db.all(`SELECT paket, status, timestamp, expired_at FROM orders WHERE user_id = ? ORDER BY timestamp DESC`, [userId], (err, rows) => {
@@ -238,23 +289,17 @@ bot.command('status', (ctx) => {
     const now = Date.now();
     let message = '📦 *Status Pemesanan Kamu:*\n\n';
 
-    rows.forEach((row, index) => {
-      const paketInfo = paketList[row.paket];
+    rows.forEach((row, i) => {
+      const p = paketList[row.paket];
       const time = new Date(row.timestamp).toLocaleString('id-ID');
       const exp = row.expired_at ? new Date(row.expired_at).toLocaleString('id-ID') : '-';
-      const isExpired = row.expired_at && row.expired_at < now;
+      const expired = row.expired_at && row.expired_at < now;
 
-      message += `#${index + 1}\n`;
-      message += `📦 Paket: *${paketInfo.name}*\n`;
-      message += `📊 Status: *${row.status}*\n`;
-      message += `🕓 Pemesanan: ${time}\n`;
-      message += `⏳ Expired: ${exp}\n`;
-
-      if (row.status === 'approved' && !isExpired) {
-        message += `🔗 [Masuk Channel](${paketInfo.channel})\n`;
+      message += `#${i + 1}\n📦 *${p.name}*\n📊 *${row.status}*\n🕓 ${time}\n⏳ Expired: ${exp}`;
+      if (row.status === 'approved' && !expired) {
+        message += `\n🔗 [Masuk Channel](${p.channel})`;
       }
-
-      message += '\n';
+      message += '\n\n';
     });
 
     ctx.reply(message, {
@@ -269,7 +314,7 @@ bot.command('status', (ctx) => {
   });
 });
 
-// Admin command: lihat semua pending order
+// List pending (admin only)
 bot.command('listpending', (ctx) => {
   if (!ADMIN_CHAT_IDS.includes(ctx.chat.id.toString())) return;
   db.all(`SELECT id, paket, timestamp FROM users WHERE status = 'pending'`, [], (err, rows) => {
@@ -281,7 +326,7 @@ bot.command('listpending', (ctx) => {
   });
 });
 
-// Web server untuk menjaga bot tetap hidup
+// Web server
 const app = express();
 app.get("/", (_, res) => res.send("Bot aktif"));
 app.listen(3000, () => console.log("Web server aktif di port 3000"));
