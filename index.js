@@ -1,5 +1,3 @@
-// Telegram Bot Pembayaran via DANA dengan Telegraf + SQLite + Express
-
 const { Telegraf, Markup } = require('telegraf');
 const dotenv = require('dotenv');
 const express = require('express');
