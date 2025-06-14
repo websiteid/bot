@@ -219,7 +219,7 @@ bot.command('status', (ctx) => {
   db.get(`SELECT paket, status, timestamp FROM users WHERE id = ?`, [userId], (err, row) => {
     if (!row) return ctx.reply('❌ Kamu belum melakukan pemesanan.');
     const waktu = new Date(row.timestamp).toLocaleString('id-ID');
-    ctx.reply(`📦 Paket: ${paketList[row.paket].name}\n📊 Status: ${row.status}\n🕓 Pemesanan: ${waktu}`);
+    ctx.reply(`📦 Paket: ${paketList[row.paket].name}\n📊 Status: ${row.status}\n🕓 Pemesanan: ${waktu}`);🔗 [Masuk Channel](${paketInfo.channel})\n`;
   });
 });
 
