@@ -1,3 +1,5 @@
+// Telegram Bot Pembayaran via DANA dengan Telegraf + SQLite + Express
+
 const { Telegraf, Markup } = require('telegraf');
 const dotenv = require('dotenv');
 const express = require('express');
@@ -263,7 +265,9 @@ bot.action('back_to_menu', (ctx) => {
   const userId = ctx.from.id;
   db.run(`DELETE FROM users WHERE id = ?`, [userId], () => {
     ctx.answerCbQuery();
-    ctx.deleteMessage().catch(() => {});
+    if (ctx.message?.message_id || ctx.callbackQuery?.message?.message_id) {
+  ctx.deleteMessage().catch(() => {});
+}
     showMainMenu(ctx);
   });
 });
