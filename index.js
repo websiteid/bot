@@ -94,7 +94,7 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
         `Silakan bayar via *DANA* ke:\n📱 *${DANA_NUMBER}*\n\n` +
         `Atau scan QR code di atas.\n\n` +
         `Setelah itu, kirimkan *bukti pembayaran* berupa foto.\n\n` +
-        `❓ *Gimana cara transfer?* Chat admin @ujoyp`,
+        `❓ *Gimana cara transfer?* Chat admin @jnizo/@ujoyp`,
       parse_mode: 'Markdown',
       reply_markup: Markup.inlineKeyboard([
         [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
@@ -181,9 +181,9 @@ bot.action(/approve_(\d+)/, async (ctx) => {
     }
 
     bot.telegram.sendMessage(userId,
-      `✅ *Selamat! Pembayaran kamu sudah di-approve. Cek menu : /status*\n\n` +
+      `✅ *Selamat! Pembayaran kamu sudah di-approve.*\n\n` +
       `Klik tombol di bawah ini untuk masuk ke channel *${paketList[paketId].name}*.\n\n` +
-      `📩 Jika lupa link, chat admin @ujoyp`,
+      `📩 Jika lupa link, chat admin @jnizo`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
