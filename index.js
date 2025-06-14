@@ -6,13 +6,15 @@ const sqlite3 = require('sqlite3').verbose();
 dotenv.config();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
+const ADMIN_CHAT_IDS = [process.env.ADMIN_CHAT_ID]; // Bisa lebih dari satu
 const DANA_NUMBER = '087883536039';
-const DANA_QR_LINK = 'https://files.catbox.moe/blokl7.jpg'; // Ganti link ini sesuai QR kamu
+const DANA_QR_LINK = 'https://files.catbox.moe/blokl7.jpg';
+
+const PAYMENT_TIMEOUT = 24 * 60 * 60 * 1000;
+const REMINDER_TIMEOUT = 12 * 60 * 60 * 1000;
 
 // === DB Setup ===
 const db = new sqlite3.Database('./users.db');
-
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
@@ -58,9 +60,9 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
   db.get(`SELECT timestamp, status FROM users WHERE id = ?`, [userId], (err, row) => {
     if (row && row.status === 'pending') {
       const elapsed = now - row.timestamp;
-      if (elapsed < 24 * 60 * 60 * 1000) {
+      if (elapsed < PAYMENT_TIMEOUT) {
         return ctx.reply(
-          `⏳ Kamu sudah melakukan pemesanan dan belum menyelesaikan pembayaran.\nSilakan kirim bukti pembayaran atau hubungi admin.`,
+          `⏳ Kamu sudah melakukan pemesanan dan belum menyelesaikan pembayaran.`,
           Markup.inlineKeyboard([
             [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
             [{ text: '❌ Batalkan Pesanan', callback_data: 'cancel_order' }]
@@ -70,7 +72,6 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
     }
 
     const paket = paketList[paketId];
-
     db.run(`INSERT OR REPLACE INTO users (id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
       [userId, paketId, now, 'pending']);
 
@@ -80,7 +81,7 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
         `Silakan bayar via *DANA* ke:\n📱 *${DANA_NUMBER}*\n\n` +
         `Atau scan QR code di atas.\n\n` +
         `Setelah itu, kirimkan *bukti pembayaran* berupa foto.\n\n` +
-        `❓ *Gimana cara transfer?*\nKlik tombol di bawah untuk hubungi admin : @jnizo/@ujoyp`,
+        `❓ *Gimana cara transfer?* Chat admin @jnizo/@ujoyp`,
       parse_mode: 'Markdown',
       reply_markup: Markup.inlineKeyboard([
         [{ text: '📞 Hubungi Admin', url: 'https://t.me/ujoyp' }],
@@ -88,12 +89,25 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
       ])
     });
 
+    // Reminder 12 jam
+    setTimeout(() => {
+      db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
+        if (row && row.status === 'pending') {
+          ctx.telegram.sendMessage(userId,
+            `⏰ *Pengingat!* Kamu belum menyelesaikan pembayaran untuk paket *${paket.name}*.\nSelesaikan sebelum 24 jam ya.`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+      });
+    }, REMINDER_TIMEOUT);
+
+    // Hapus setelah 24 jam
     setTimeout(() => {
       db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
         if (row && row.status === 'pending') {
           db.run(`DELETE FROM users WHERE id = ?`, [userId]);
           ctx.telegram.sendMessage(userId,
-            `⏰ Waktu pembayaran telah habis (24 jam).\nSilakan ulangi pembelian.`,
+            `⏰ Waktu pembayaran habis (24 jam). Silakan ulangi pembelian.`,
             {
               reply_markup: Markup.inlineKeyboard([
                 [{ text: '🔁 Kembali ke Menu', callback_data: 'back_to_menu' }]
@@ -102,47 +116,31 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
           );
         }
       });
-    }, 24 * 60 * 60 * 1000);
+    }, PAYMENT_TIMEOUT);
   });
-});
-
-// === Batal & Kembali ===
-bot.action('cancel_order', (ctx) => {
-  const userId = ctx.from.id;
-  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
-    if (!err) {
-      ctx.answerCbQuery('Pesanan dibatalkan.');
-      ctx.reply('❌ Pesanan kamu telah dibatalkan.');
-      showMainMenu(ctx);
-    }
-  });
-});
-
-bot.action('back_to_menu', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.deleteMessage().catch(() => {});
-  showMainMenu(ctx);
 });
 
 // === Kirim Bukti Pembayaran ===
 bot.on('photo', (ctx) => {
+  ctx.replyWithChatAction('upload_photo');
   const userId = ctx.from.id;
   const username = ctx.from.username || ctx.from.first_name;
 
   db.get(`SELECT paket FROM users WHERE id = ?`, [userId], (err, row) => {
     if (!row) return ctx.reply('❌ Kamu belum memilih paket.');
-
     const paketId = row.paket;
     const photo = ctx.message.photo.at(-1).file_id;
 
-    ctx.telegram.sendPhoto(ADMIN_CHAT_ID, photo, {
-      caption: `📥 Bukti pembayaran dari @${username}\nID: ${userId}\nPaket: ${paketId}`,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '✅ Approve', callback_data: `approve_${userId}` }],
-          [{ text: '❌ Tolak', callback_data: `reject_${userId}` }]
-        ]
-      }
+    ADMIN_CHAT_IDS.forEach(adminId => {
+      ctx.telegram.sendPhoto(adminId, photo, {
+        caption: `📥 Bukti pembayaran dari @${username}\nID: ${userId}\nPaket: ${paketId}`,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Approve', callback_data: `approve_${userId}` }],
+            [{ text: '❌ Tolak', callback_data: `reject_${userId}` }]
+          ]
+        }
+      });
     });
 
     ctx.reply('📩 Bukti pembayaran sudah dikirim ke admin. Tunggu konfirmasi ya.');
@@ -155,27 +153,23 @@ bot.action(/approve_(\d+)/, async (ctx) => {
 
   db.get(`SELECT paket FROM users WHERE id = ?`, [userId], async (err, row) => {
     if (!row) return ctx.reply('❌ Data user tidak ditemukan.');
-
     const paketId = row.paket;
     const channelLink = paketList[paketId].channel;
 
     db.run(`UPDATE users SET status = 'approved' WHERE id = ?`, [userId]);
 
-    // Ganti tombol approve jadi dummy
     try {
       await ctx.editMessageReplyMarkup({
-        inline_keyboard: [
-          [{ text: '✅ Sudah di-approve', callback_data: 'noop' }]
-        ]
+        inline_keyboard: [[{ text: '✅ Sudah di-approve', callback_data: 'noop' }]]
       });
     } catch (e) {
-      console.error('Gagal edit tombol approve:', e);
+      console.error('Gagal ubah tombol:', e);
     }
 
     bot.telegram.sendMessage(userId,
       `✅ *Selamat! Pembayaran kamu sudah di-approve.*\n\n` +
       `Klik tombol di bawah ini untuk masuk ke channel *${paketList[paketId].name}*.\n\n` +
-      `📩 Jika kamu lupa linknya, silakan chat admin @jnizo`,
+      `📩 Jika lupa link, chat admin @jnizo`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -199,9 +193,46 @@ bot.action(/reject_(\d+)/, (ctx) => {
   ctx.answerCbQuery('User ditolak.');
 });
 
-// === Tombol dummy ===
-bot.action('noop', (ctx) => {
-  ctx.answerCbQuery('Sudah diproses.');
+// === Batal & Navigasi ===
+bot.action('cancel_order', (ctx) => {
+  const userId = ctx.from.id;
+  db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
+    if (!err) {
+      ctx.answerCbQuery('Pesanan dibatalkan.');
+      ctx.reply('❌ Pesanan kamu telah dibatalkan.');
+      showMainMenu(ctx);
+    }
+  });
+});
+
+bot.action('back_to_menu', (ctx) => {
+  ctx.answerCbQuery();
+  ctx.deleteMessage().catch(() => {});
+  showMainMenu(ctx);
+});
+
+bot.action('noop', (ctx) => ctx.answerCbQuery('Sudah diproses.'));
+
+// === /status ===
+bot.command('status', (ctx) => {
+  const userId = ctx.from.id;
+  db.get(`SELECT paket, status, timestamp FROM users WHERE id = ?`, [userId], (err, row) => {
+    if (!row) return ctx.reply('❌ Kamu belum melakukan pemesanan.');
+    const waktu = new Date(row.timestamp).toLocaleString('id-ID');
+    ctx.reply(`📦 Paket: ${paketList[row.paket].name}\n📊 Status: ${row.status}\n🕓 Pemesanan: ${waktu}`);
+  });
+});
+
+// === /listpending (admin only) ===
+bot.command('listpending', (ctx) => {
+  if (!ADMIN_CHAT_IDS.includes(ctx.chat.id.toString())) return;
+  db.all(`SELECT id, paket, timestamp FROM users WHERE status = 'pending'`, [], (err, rows) => {
+    if (!rows.length) return ctx.reply('✅ Tidak ada pesanan pending.');
+    const msg = rows.map(r =>
+      `🆔 ${r.id} - Paket: ${paketList[r.paket].name} - ${new Date(r.timestamp).toLocaleString('id-ID')}`
+    ).join('\n\n');
+    ctx.reply(`📋 Pending Orders:\n\n${msg}`);
+  });
 });
 
 // === Web Server ===
