@@ -6,16 +6,24 @@ const sqlite3 = require('sqlite3').verbose();
 dotenv.config();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const ADMIN_CHAT_IDS = [process.env.ADMIN_CHAT_ID]; // Bisa lebih dari satu
+const ADMIN_CHAT_IDS = [process.env.ADMIN_CHAT_ID];
 const DANA_NUMBER = '087883536039';
 const DANA_QR_LINK = 'https://files.catbox.moe/blokl7.jpg';
 
 const PAYMENT_TIMEOUT = 24 * 60 * 60 * 1000;
 const REMINDER_TIMEOUT = 12 * 60 * 60 * 1000;
 
-// === DB Setup ===
 const db = new sqlite3.Database('./users.db');
 db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    paket TEXT,
+    timestamp INTEGER,
+    status TEXT,
+    expired_at INTEGER
+  )`);
+
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     paket TEXT,
@@ -24,7 +32,6 @@ db.serialize(() => {
   )`);
 });
 
-// === Daftar paket ===
 const paketList = {
   lokal: { name: "Lokal", harga: 2000, channel: 'https://t.me/+05D0N_SWsMNkMTY1' },
   cina: { name: "Cina", harga: 1000, channel: 'https://t.me/+D0o3LkSFhLAxZGQ1' },
@@ -33,7 +40,6 @@ const paketList = {
   yaoi: { name: "Yaoi", harga: 2000, channel: 'https://t.me/+Bs212qTHcRZkOTg9' }
 };
 
-// === Menu Utama ===
 function showMainMenu(ctx) {
   ctx.reply(
     `👋 Selamat datang!\n\nPilih paket yang kamu inginkan:\n\n` +
@@ -48,10 +54,8 @@ function showMainMenu(ctx) {
   );
 }
 
-// === Start ===
 bot.start((ctx) => showMainMenu(ctx));
 
-// === Pilih Paket ===
 bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
   const paketId = ctx.match[1];
   const userId = ctx.from.id;
@@ -75,6 +79,9 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
     db.run(`INSERT OR REPLACE INTO users (id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
       [userId, paketId, now, 'pending']);
 
+    db.run(`INSERT INTO orders (user_id, paket, timestamp, status) VALUES (?, ?, ?, ?)`,
+      [userId, paketId, now, 'pending']);
+
     ctx.replyWithPhoto(DANA_QR_LINK, {
       caption:
         `📦 *${paket.name}* - Rp${paket.harga.toLocaleString('id-ID')}\n\n` +
@@ -89,7 +96,6 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
       ])
     });
 
-    // Reminder 12 jam
     setTimeout(() => {
       db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
         if (row && row.status === 'pending') {
@@ -101,7 +107,6 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
       });
     }, REMINDER_TIMEOUT);
 
-    // Hapus setelah 24 jam
     setTimeout(() => {
       db.get(`SELECT status FROM users WHERE id = ?`, [userId], (err, row) => {
         if (row && row.status === 'pending') {
@@ -120,7 +125,6 @@ bot.action(/(lokal|cina|asia|amerika|yaoi)/, (ctx) => {
   });
 });
 
-// === Kirim Bukti Pembayaran ===
 bot.on('photo', (ctx) => {
   ctx.replyWithChatAction('upload_photo');
   const userId = ctx.from.id;
@@ -147,7 +151,6 @@ bot.on('photo', (ctx) => {
   });
 });
 
-// === Admin Approve ===
 bot.action(/approve_(\d+)/, async (ctx) => {
   const userId = ctx.match[1];
 
@@ -156,7 +159,8 @@ bot.action(/approve_(\d+)/, async (ctx) => {
     const paketId = row.paket;
     const channelLink = paketList[paketId].channel;
 
-    db.run(`UPDATE users SET status = 'approved' WHERE id = ?`, [userId]);
+    const expiredAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    db.run(`UPDATE orders SET status = 'approved', expired_at = ? WHERE user_id = ? AND status = 'pending'`, [expiredAt, userId]);
 
     try {
       await ctx.editMessageReplyMarkup({
@@ -185,7 +189,6 @@ bot.action(/approve_(\d+)/, async (ctx) => {
   });
 });
 
-// === Admin Reject ===
 bot.action(/reject_(\d+)/, (ctx) => {
   const userId = ctx.match[1];
   db.run(`DELETE FROM users WHERE id = ?`, [userId]);
@@ -193,7 +196,6 @@ bot.action(/reject_(\d+)/, (ctx) => {
   ctx.answerCbQuery('User ditolak.');
 });
 
-// === Batal & Navigasi ===
 bot.action('cancel_order', (ctx) => {
   const userId = ctx.from.id;
   db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
@@ -213,17 +215,37 @@ bot.action('back_to_menu', (ctx) => {
 
 bot.action('noop', (ctx) => ctx.answerCbQuery('Sudah diproses.'));
 
-// === /status ===
 bot.command('status', (ctx) => {
   const userId = ctx.from.id;
-  db.get(`SELECT paket, status, timestamp FROM users WHERE id = ?`, [userId], (err, row) => {
-    if (!row) return ctx.reply('❌ Kamu belum melakukan pemesanan.');
-    const waktu = new Date(row.timestamp).toLocaleString('id-ID');
-    ctx.reply(`📦 Paket: ${paketList[row.paket].name}\n📊 Status: ${row.status}\n🕓 Pemesanan: ${waktu}`);🔗 [Masuk Channel](${paketInfo.channel})\n`;
+  db.all(`SELECT paket, status, timestamp, expired_at FROM orders WHERE user_id = ? ORDER BY timestamp DESC`, [userId], (err, rows) => {
+    if (!rows || rows.length === 0) return ctx.reply('❌ Kamu belum melakukan pemesanan.');
+
+    const now = Date.now();
+    let message = '📦 *Status Pemesanan Kamu:*\n\n';
+
+    rows.forEach((row, index) => {
+      const paketInfo = paketList[row.paket];
+      const time = new Date(row.timestamp).toLocaleString('id-ID');
+      const exp = row.expired_at ? new Date(row.expired_at).toLocaleString('id-ID') : '-';
+      const isExpired = row.expired_at && row.expired_at < now;
+
+      message += `#${index + 1}\n`;
+      message += `📦 Paket: *${paketInfo.name}*\n`;
+      message += `📊 Status: *${row.status}*\n`;
+      message += `🕓 Pemesanan: ${time}\n`;
+      message += `⏳ Expired: ${exp}\n`;
+
+      if (row.status === 'approved' && !isExpired) {
+        message += `🔗 [Masuk Channel](${paketInfo.channel})\n`;
+      }
+
+      message += '\n';
+    });
+
+    ctx.reply(message, { parse_mode: 'Markdown', disable_web_page_preview: true });
   });
 });
 
-// === /listpending (admin only) ===
 bot.command('listpending', (ctx) => {
   if (!ADMIN_CHAT_IDS.includes(ctx.chat.id.toString())) return;
   db.all(`SELECT id, paket, timestamp FROM users WHERE status = 'pending'`, [], (err, rows) => {
@@ -235,7 +257,6 @@ bot.command('listpending', (ctx) => {
   });
 });
 
-// === Web Server ===
 const app = express();
 app.get("/", (_, res) => res.send("Bot aktif"));
 app.listen(3000, () => console.log("Web server aktif di port 3000"));
