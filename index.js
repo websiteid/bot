@@ -247,9 +247,8 @@ bot.action('cancel_order', (ctx) => {
   const userId = ctx.from.id;
   db.run(`DELETE FROM users WHERE id = ?`, [userId], (err) => {
     if (!err) {
-      ctx.answerCbQuery('Pesanan dibatalkan.');
-      ctx.reply('❌ Pesanan kamu telah dibatalkan.');
-      showMainMenu(ctx);
+     ctx.answerCbQuery('❌ Pesanan kamu telah dibatalkan.');
+    showMainMenu(ctx);
     }
   });
 });
