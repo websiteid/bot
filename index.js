@@ -437,4 +437,8 @@ app.get('/', (_, res) => res.send('🤖 Bot aktif'));
 app.listen(3000, () => console.log('✅ Web server aktif di port 3000'));
 
 // Jalankan bot
-bot.launch(); 
+bot.telegram.deleteWebhook().then(() => {
+  bot.launch();
+  console.log('🤖 Bot berjalan dengan polling...');
+});
+
