@@ -3,16 +3,15 @@ const dotenv = require('dotenv');
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 
-// Load .env
+// Load environment variables
 dotenv.config();
 
-// Inisialisasi bot & konfigurasi
+// Konfigurasi bot dan admin
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_CHAT_IDS = [process.env.ADMIN_CHAT_ID];
-const DANA_NUMBER = '087883536039';
-const DANA_QR_LINK = 'https://files.catbox.moe/blokl7.jpg';
+const DANA_QR_LINK = 'https://files.catbox.moe/mxovdq.jpg';
 
-// Timeout dalam ms
+// Timeout (ms)
 const PAYMENT_TIMEOUT = 24 * 60 * 60 * 1000;   // 24 jam
 const REMINDER_TIMEOUT = 12 * 60 * 60 * 1000;  // 12 jam
 
@@ -30,7 +29,16 @@ db.serialize(() => {
   )`, (err) => {
     if (err) console.error('Error creating orders table:', err.message);
   });
+
+  db.run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    paket TEXT,
+    status TEXT
+  )`, (err) => {
+    if (err) console.error('Error creating users table:', err.message);
+  });
 });
+
 
 // Daftar paket tersedia
 const paketList = {
@@ -75,7 +83,7 @@ const paketList = {
 // Fungsi: tampilkan menu utama paket
 function showMainMenu(ctx) {
   ctx.reply(
-    `👋 Selamat datang!\n\nPilih paket yang kamu inginkan:\n` +
+    `👋 Selamat datang dibot VIP @ujoyp!\n\nPilih paket yang kamu inginkan:\n` +
     `📦 Lokal - Rp2.000\n📦 Cina - Rp2.000\n📦 Asia - Rp2.000\n` +
     `📦 Amerika - Rp2.000\n📦 Yaoi - Rp2.000\n📦 Paket Lengkap - Rp8.000`,
     Markup.inlineKeyboard([
@@ -124,10 +132,11 @@ bot.action(/^(lokal|cina|asia|amerika|yaoi|lengkap)$/, (ctx) => {
 
 
     const pkg = paketList[paketId];
-    let caption = `📦 *${pkg.name}* – Rp${pkg.harga.toLocaleString('id-ID')}\n\n` +
-                  `Silakan bayar DANA/QRIS ke:\n📱 *${DANA_NUMBER}* (DANA)\n\n` +
-                  `Setelah bayar, kirim bukti foto/ss hasil transaksi.\n\n` +
-                  `Butuh bantuan❓ Chat admin @ujoyp`;
+    const caption = `📦 *${pkg.name}* – Rp${pkg.harga.toLocaleString('id-ID')}\n\n` +
+      `Silakan scan QR di atas.\n` +
+      `Kirim bukti pembayaran (foto/screenshot) ke sini.\n\n` +
+      `*Jangan kirim bukti palsu, kamu bisa di-banned!*\n` +
+      `Butuh bantuan? Hubungi admin @ujoyp`;
 
     ctx.replyWithPhoto(DANA_QR_LINK, {
       caption,
@@ -137,6 +146,7 @@ bot.action(/^(lokal|cina|asia|amerika|yaoi|lengkap)$/, (ctx) => {
         [Markup.button.callback('❌ Batalkan Pesanan', 'cancel_order')]
       ])
     });
+
 
 
 
@@ -215,7 +225,7 @@ bot.on('photo', (ctx) => {
   const photoFileId = ctx.message.photo.slice(-1)[0].file_id;
 
   db.get(`SELECT paket FROM users WHERE id = ?`, [userId], (err, row) => {
-    if (!row) return ctx.reply('❌ Kamu belum memilih paket.');
+    if (!row) return ctx.reply('❌ Kamu belum memilih paket. Silahkan klik /start dan pencet tombol sesuai yang inggin kamu pesan!');
 
     ADMIN_CHAT_IDS.forEach(adminId => {
       ctx.telegram.sendPhoto(adminId, photoFileId, {
@@ -229,7 +239,7 @@ bot.on('photo', (ctx) => {
       });
     });
 
-    ctx.reply('📩 Bukti pembayaran dikirim ke admin. Mohon tunggu.');
+    ctx.reply('📩 Bukti pembayaran dikirim ke admin. Mohon tunggu sebentar, jika admin belum merespon hub : @ujoyp.');
   });
 });
 
@@ -441,4 +451,3 @@ bot.telegram.deleteWebhook().then(() => {
   bot.launch();
   console.log('🤖 Bot berjalan dengan polling...');
 });
-
